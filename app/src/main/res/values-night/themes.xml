@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.Printf" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/brand_black</item>
+        <item name="android:navigationBarColor">@color/brand_white</item>
+        <item name="android:windowBackground">@color/brand_background</item>
+    </style>
+
+    <style name="Theme.Printf.Splash" parent="Theme.Printf">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_logo_inset</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/brand_white</item>
+        <item name="postSplashScreenTheme">@style/Theme.Printf</item>
+    </style>
+</resources>

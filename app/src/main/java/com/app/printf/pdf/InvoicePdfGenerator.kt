@@ -1,0 +1,721 @@
+package com.app.printf.pdf
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.graphics.pdf.PdfDocument
+import androidx.core.content.ContextCompat
+import com.app.printf.R
+import com.app.printf.data.entity.CompanyProfile
+import com.app.printf.data.model.InvoiceWithItems
+import com.app.printf.util.Formatters
+import com.app.printf.util.InvoiceNumberUtils
+import com.app.printf.util.TaxCalculator
+import com.app.printf.util.TaxConstants
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
+
+object InvoicePdfGenerator {
+    private const val PAGE_WIDTH = 595
+    private const val PAGE_HEIGHT = 842
+
+    private const val OUTER_LEFT = 36f
+    private const val OUTER_TOP = 42f
+    private const val OUTER_RIGHT = PAGE_WIDTH - 36f
+    private const val OUTER_BOTTOM = PAGE_HEIGHT - 42f
+
+    private const val HEADER_LINE_SPACING = 12f
+    private const val HEADER_INFO_TEXT_SIZE = 9.5f
+    private const val HEADER_ICON_SIZE = 10f
+    private const val PDF_BASE_TEXT_SIZE = 10f
+    private const val PDF_COMPANY_NAME_SIZE = 18f
+    private const val PDF_TAX_INVOICE_SIZE = 11.5f
+    private const val HEADER_ICON_GAP = 5f
+    private const val HEADER_INFO_MAX_TEXT_WIDTH = 460f
+    private const val META_H = 66f
+    private const val PARTY_H = 108f
+    private const val PARTY_ADDRESS_LINE_SPACING = 13f
+    private const val TABLE_HEADER_H = 22f
+    private const val TABLE_ROW_H = 24f
+    private const val MIN_TABLE_BODY_ROWS = 10
+    private const val FOOTER_MIN_H = 200f
+
+    private const val COLOR_BLACK = Color.BLACK
+    private val COLOR_TAX_INVOICE = Color.rgb(192, 96, 0)
+
+    fun generate(
+        context: Context,
+        invoiceWithItems: InvoiceWithItems,
+        companyProfile: CompanyProfile,
+    ): File {
+        val invoice = invoiceWithItems.invoice
+        val items = invoiceWithItems.lineItems
+
+        val companyName = companyProfile.companyName.ifBlank { "PR ENGINEERING" }
+        val companyAddress = companyProfile.address.ifBlank { "Puttekkad, Feroke" }
+
+        val subTotal = items.sumOf { it.unitPrice * it.quantity }
+        val salesType = invoice.salesType
+            .ifBlank { companyProfile.salesType }
+            .ifBlank { TaxConstants.STATE_SALE }
+        val isInterstate = TaxCalculator.isInterstateSale(salesType)
+        val taxTotals = TaxCalculator.invoiceTotals(subTotal, isInterstate)
+        val sgst = taxTotals.sgst
+        val cgst = taxTotals.cgst
+        val igst = taxTotals.igst
+        val totalGst = taxTotals.totalGst
+        val gross = taxTotals.gross
+        val roundedGrand = taxTotals.grandTotal
+        val rounding = taxTotals.rounding
+
+        val dir = File(context.filesDir, "invoices").apply { mkdirs() }
+        val file = File(dir, "invoice_${InvoiceNumberUtils.sanitizeForFileName(invoice.invoiceNumber)}.pdf")
+
+        val document = PdfDocument()
+        val page = document.startPage(PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 1).create())
+        val canvas = page.canvas
+
+        val stroke = Paint().apply {
+            style = Paint.Style.STROKE
+            color = COLOR_BLACK
+            strokeWidth = 1f
+            isAntiAlias = true
+        }
+        val text = Paint().apply {
+            style = Paint.Style.FILL
+            color = COLOR_BLACK
+            textSize = PDF_BASE_TEXT_SIZE
+            isAntiAlias = true
+        }
+        val bold = Paint(text).apply { typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+        val right = Paint(text).apply { textAlign = Paint.Align.RIGHT }
+        val rightBold = Paint(bold).apply { textAlign = Paint.Align.RIGHT }
+        val center = Paint(text).apply { textAlign = Paint.Align.CENTER }
+        val centerBold = Paint(bold).apply { textAlign = Paint.Align.CENTER }
+
+        canvas.drawColor(Color.WHITE)
+        canvas.drawRect(OUTER_LEFT, OUTER_TOP, OUTER_RIGHT, OUTER_BOTTOM, stroke)
+
+        var y = OUTER_TOP
+
+        // 1) Header — company name + icon info block (address, GSTIN, email, phone)
+        val centerX = (OUTER_LEFT + OUTER_RIGHT) / 2f
+        val headerInfoPaint = Paint(text).apply { textSize = HEADER_INFO_TEXT_SIZE }
+        val headerRows = buildHeaderInfoRows(companyProfile, companyAddress, headerInfoPaint)
+        val contentHeaderHeight = 34f + (headerRows.size * HEADER_LINE_SPACING) + 10f
+        val headerHeight = max(contentHeaderHeight, 78f)
+        val headerBottom = y + headerHeight
+
+        canvas.drawRect(OUTER_LEFT, y, OUTER_RIGHT, headerBottom, stroke)
+
+        loadPdfLogoBitmap(context)?.let { logo ->
+            drawHeaderLogo(canvas, logo, OUTER_LEFT, y, headerHeight)
+        }
+
+        val companyNamePaint = Paint(bold).apply {
+            textSize = PDF_COMPANY_NAME_SIZE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+        }
+        canvas.drawText(companyName.uppercase(), centerX, y + 24f, companyNamePaint)
+
+        drawHeaderInfoBlock(
+            canvas = canvas,
+            centerX = centerX,
+            startBaselineY = y + 38f,
+            rows = headerRows,
+            textPaint = headerInfoPaint,
+        )
+
+        val taxInvoicePaint = Paint(rightBold).apply { color = COLOR_TAX_INVOICE }
+        taxInvoicePaint.textSize = PDF_TAX_INVOICE_SIZE
+        canvas.drawText("TAX INVOICE", OUTER_RIGHT - 8f, y + 16f, taxInvoicePaint)
+
+        y = headerBottom
+
+        // 2) Invoice meta block
+        val metaBottom = y + META_H
+        val metaMidX = OUTER_LEFT + (OUTER_RIGHT - OUTER_LEFT) * 0.57f
+        canvas.drawRect(OUTER_LEFT, y, OUTER_RIGHT, metaBottom, stroke)
+        canvas.drawLine(metaMidX, y, metaMidX, metaBottom, stroke)
+
+        val metaRowH = META_H / 4f
+        for (i in 1..3) {
+            val lineY = y + (i * metaRowH)
+            canvas.drawLine(OUTER_LEFT, lineY, OUTER_RIGHT, lineY, stroke)
+        }
+
+        val invNo = InvoiceNumberUtils.formatForPdf(invoice.invoiceNumber)
+        val dateText = formatShortDate(invoice.dateMillis)
+        val dueDate = formatShortDate(invoice.dateMillis + (15L * 24 * 60 * 60 * 1000))
+
+        drawMetaRow(canvas, y + metaRowH * 0 + 12f, OUTER_LEFT + 6f, "Invoice Number:", invNo, bold, text)
+        drawMetaRow(canvas, y + metaRowH * 1 + 12f, OUTER_LEFT + 6f, "Invoice date:", dateText, bold, text)
+        drawMetaRow(canvas, y + metaRowH * 2 + 12f, OUTER_LEFT + 6f, "Terms", "15", bold, text)
+        drawMetaRow(canvas, y + metaRowH * 3 + 12f, OUTER_LEFT + 6f, "Due Date", dueDate, bold, text)
+
+        drawMetaRow(canvas, y + metaRowH * 0 + 12f, metaMidX + 6f, "Place Of Supply", companyProfile.state.ifBlank { "Kerala(32)" }, bold, text)
+        val ewayBill = invoice.ewayBillNo.ifBlank { "-" }
+        val buyerPo = invoice.buyerPoNo.ifBlank { "-" }
+        drawMetaRow(canvas, y + metaRowH * 1 + 12f, metaMidX + 6f, "E-Way Bill", ewayBill, bold, text)
+        drawMetaRow(canvas, y + metaRowH * 2 + 12f, metaMidX + 6f, "Buyer PO No.", buyerPo, bold, text)
+
+        y = metaBottom
+
+        // 3) Bill/Ship block
+        val partyBottom = y + PARTY_H
+        val partyMidX = (OUTER_LEFT + OUTER_RIGHT) / 2f
+        canvas.drawRect(OUTER_LEFT, y, OUTER_RIGHT, partyBottom, stroke)
+        canvas.drawLine(partyMidX, y, partyMidX, partyBottom, stroke)
+
+        bold.textSize = PDF_BASE_TEXT_SIZE
+        canvas.drawText("Bill To", OUTER_LEFT + 6f, y + 13f, bold)
+        canvas.drawText("Ship To", partyMidX + 6f, y + 13f, bold)
+
+        val partyHeaderLineY = y + 18f
+        canvas.drawLine(OUTER_LEFT, partyHeaderLineY, OUTER_RIGHT, partyHeaderLineY, stroke)
+
+        val billName = invoice.billToName.ifBlank { invoice.customerName }
+        val shipName = invoice.shipToName.ifBlank { billName }
+        val billAddress = invoice.billToAddress.ifBlank { invoice.customerAddress }
+        val shipAddress = invoice.shipToAddress.ifBlank { billAddress }
+        val billGstin = invoice.billToGstin.ifBlank { "-" }
+        val shipGstin = invoice.shipToGstin.ifBlank { "-" }
+
+        bold.textSize = 12f
+        canvas.drawText(billName.uppercase(), OUTER_LEFT + 6f, y + 36f, bold)
+        canvas.drawText(shipName.uppercase(), partyMidX + 6f, y + 36f, bold)
+
+        text.textSize = 9.5f
+        val billLines = splitAddressLines(billAddress)
+        val shipLines = splitAddressLines(shipAddress)
+        val maxLines = max(billLines.size, shipLines.size).coerceAtMost(4)
+        for (i in 0 until maxLines) {
+            val lineY = y + 48f + (i * PARTY_ADDRESS_LINE_SPACING)
+            billLines.getOrNull(i)?.let { canvas.drawText(it, OUTER_LEFT + 6f, lineY, text) }
+            shipLines.getOrNull(i)?.let { canvas.drawText(it, partyMidX + 6f, lineY, text) }
+        }
+        val salesRowTop = partyBottom - 18f
+        canvas.drawLine(OUTER_LEFT, salesRowTop, OUTER_RIGHT, salesRowTop, stroke)
+        canvas.drawText("GSTIN: $billGstin", OUTER_LEFT + 6f, salesRowTop - 4f, text)
+        canvas.drawText("GSTIN: $shipGstin", partyMidX + 6f, salesRowTop - 4f, text)
+        canvas.drawText("Sales Type:", OUTER_LEFT + 6f, partyBottom - 4f, text)
+        canvas.drawText(salesType, OUTER_LEFT + 62f, partyBottom - 4f, bold)
+
+        y = partyBottom
+
+        // 4) Items table
+        val tableTop = y
+        val colPerc = floatArrayOf(0.06f, 0.28f, 0.08f, 0.08f, 0.12f, 0.08f, 0.30f)
+        val colX = FloatArray(colPerc.size + 1)
+        colX[0] = OUTER_LEFT
+        for (i in colPerc.indices) {
+            colX[i + 1] = colX[i] + ((OUTER_RIGHT - OUTER_LEFT) * colPerc[i])
+        }
+
+        canvas.drawRect(OUTER_LEFT, tableTop, OUTER_RIGHT, tableTop + TABLE_HEADER_H, stroke)
+        colX.forEach { xLine -> canvas.drawLine(xLine, tableTop, xLine, tableTop + TABLE_HEADER_H, stroke) }
+
+        val headers = listOf(
+            "SL NO",
+            "Description of Goods",
+            "HSN/SAC",
+            "Quantity",
+            "Unit Price",
+            "TAX RATE",
+            "Gross Amount",
+        )
+        bold.textSize = 9f
+        headers.forEachIndexed { i, h -> canvas.drawText(h, colX[i] + 2f, tableTop + 15f, bold) }
+
+        var rowY = tableTop + TABLE_HEADER_H
+        text.textSize = 9.5f
+        right.textSize = 9.5f
+        center.textSize = 9.5f
+        val lineTaxRate = "18%"
+
+        for (i in items.indices) {
+            val item = items[i]
+            val lineAmount = item.unitPrice * item.quantity
+            canvas.drawText((i + 1).toString(), colX[0] + 3f, rowY + 15f, text)
+            canvas.drawText(
+                ellipsis(item.productName.uppercase(), 24),
+                colX[1] + 3f,
+                rowY + 15f,
+                text,
+            )
+            canvas.drawText(item.hsn, colX[2] + 2f, rowY + 15f, text)
+            canvas.drawText(item.quantity.toString(), colX[3] + 2f, rowY + 15f, text)
+            drawColumnAmount(canvas, colX[4], colX[5], rowY + 15f, Formatters.formatPdfAmount(item.unitPrice), right)
+            canvas.drawText(lineTaxRate, (colX[5] + colX[6]) / 2f, rowY + 15f, center)
+            drawColumnAmount(canvas, colX[6], colX[7], rowY + 15f, Formatters.formatPdfAmount(lineAmount), right)
+            rowY += TABLE_ROW_H
+        }
+
+        val minTableBottom = tableTop + TABLE_HEADER_H + (MIN_TABLE_BODY_ROWS * TABLE_ROW_H)
+        val itemsBottom = rowY
+        val bottomTop = max(itemsBottom, minTableBottom).coerceAtMost(OUTER_BOTTOM - FOOTER_MIN_H)
+
+        // 5) Bottom section split
+        val splitX = OUTER_LEFT + (OUTER_RIGHT - OUTER_LEFT) * 0.64f
+        canvas.drawLine(OUTER_LEFT, bottomTop, OUTER_RIGHT, bottomTop, stroke)
+        canvas.drawRect(OUTER_LEFT, bottomTop, OUTER_RIGHT, OUTER_BOTTOM, stroke)
+        canvas.drawLine(splitX, bottomTop, splitX, OUTER_BOTTOM, stroke)
+
+        // Complete vertical table borders only for used rows.
+        colX.forEach { xLine -> canvas.drawLine(xLine, tableTop, xLine, bottomTop, stroke) }
+
+        // Left: thanks + bank details
+        bold.textSize = 15f
+        centerBold.textSize = 15f
+        canvas.drawText("Thanks For Your Business.", (OUTER_LEFT + splitX) / 2f, bottomTop + 32f, centerBold)
+
+        bold.textSize = PDF_BASE_TEXT_SIZE
+        text.textSize = PDF_BASE_TEXT_SIZE
+        canvas.drawText("Our Bank Details", OUTER_LEFT + 8f, bottomTop + 62f, bold)
+        canvas.drawText("Account Holder Name: ${companyProfile.accountHolderName.ifBlank { companyName.uppercase() }}", OUTER_LEFT + 8f, bottomTop + 80f, text)
+        canvas.drawText("Account Number: ${companyProfile.accountNumber.ifBlank { "N/A" }}", OUTER_LEFT + 8f, bottomTop + 94f, text)
+        canvas.drawText("IFSC: ${companyProfile.ifscCode.ifBlank { "N/A" }}", OUTER_LEFT + 8f, bottomTop + 108f, text)
+        canvas.drawText("Account Type: ${companyProfile.accountType.ifBlank { "CURRENT" }}", OUTER_LEFT + 8f, bottomTop + 122f, text)
+        canvas.drawText("Bank: ${companyProfile.bankName.ifBlank { "N/A" }}", OUTER_LEFT + 8f, bottomTop + 136f, text)
+
+        // Right: tax summary
+        var sy = bottomTop
+        val sr = 20f
+        drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Total Amount", subTotal, stroke, text, right)
+        sy += sr
+        if (isInterstate) {
+            drawSummary(canvas, splitX, OUTER_RIGHT, sy, "IGST @18%", igst, stroke, text, right)
+            sy += sr
+        } else {
+            drawSummary(canvas, splitX, OUTER_RIGHT, sy, "SGST @9%", sgst, stroke, text, right)
+            sy += sr
+            drawSummary(canvas, splitX, OUTER_RIGHT, sy, "CGST @9%", cgst, stroke, text, right)
+            sy += sr
+        }
+        drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Total GST Amt", totalGst, stroke, text, right)
+        sy += sr
+        drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Sub Total", gross, stroke, bold, rightBold)
+        sy += sr
+        drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Rounding off", rounding, stroke, text, right)
+        sy += sr
+        drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Grand Total", roundedGrand, stroke, bold, rightBold)
+        sy += 40f
+
+        text.textSize = PDF_BASE_TEXT_SIZE
+        canvas.drawText("For ${companyName.uppercase()}", splitX + 8f, sy, text)
+
+        drawAuthorizedSignatureBlock(
+            canvas = canvas,
+            signaturePath = companyProfile.signaturePath,
+            cellLeft = splitX,
+            cellRight = OUTER_RIGHT,
+            forLineBaseline = sy,
+            center = center,
+        )
+
+        document.finishPage(page)
+        FileOutputStream(file).use { output -> document.writeTo(output) }
+        document.close()
+        return file
+    }
+
+    private fun drawAuthorizedSignatureBlock(
+        canvas: Canvas,
+        signaturePath: String,
+        cellLeft: Float,
+        cellRight: Float,
+        forLineBaseline: Float,
+        center: Paint,
+    ) {
+        val label = "Authorized Signature"
+        val horizontalPadding = 10f
+        val innerLeft = cellLeft + horizontalPadding
+        val innerRight = cellRight - horizontalPadding
+        val cellCenterX = (innerLeft + innerRight) / 2f
+        val cellWidth = innerRight - innerLeft
+
+        val labelBaseline = OUTER_BOTTOM - 12f
+        val signatureAreaBottom = labelBaseline - 14f
+        val signatureAreaTop = forLineBaseline + 18f
+        val maxSignatureHeight = (signatureAreaBottom - signatureAreaTop).coerceAtLeast(18f)
+
+        center.textSize = 9.5f
+        canvas.drawText(label, cellCenterX, labelBaseline, center)
+
+        loadSignatureBitmap(signaturePath)?.let { signature ->
+            val maxWidth = cellWidth * 0.9f
+            val scale = min(maxWidth / signature.width, maxSignatureHeight / signature.height)
+            val width = signature.width * scale
+            val height = signature.height * scale
+            val destLeft = cellCenterX - (width / 2f)
+            val destBottom = signatureAreaBottom
+            val destTop = destBottom - height
+            val dest = RectF(destLeft, destTop, destLeft + width, destBottom)
+            canvas.drawBitmap(signature, null, dest, null)
+        }
+    }
+
+    private fun loadSignatureBitmap(path: String): Bitmap? {
+        if (path.isBlank()) return null
+        return BitmapFactory.decodeFile(path)
+    }
+
+    private fun loadPdfLogoBitmap(context: Context): Bitmap? {
+        val logoId = context.resources.getIdentifier("pr_invoice_logo", "drawable", context.packageName)
+        if (logoId != 0) {
+            BitmapFactory.decodeResource(context.resources, logoId)?.let { return it }
+        }
+        return drawableToBitmap(context, R.drawable.splash_logo_inset)
+            ?: drawableToBitmap(context, R.drawable.ic_launcher_foreground)
+    }
+
+    private fun drawableToBitmap(context: Context, drawableResId: Int): Bitmap? {
+        val drawable = ContextCompat.getDrawable(context, drawableResId) ?: return null
+        val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 256
+        val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 256
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val bitmapCanvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, width, height)
+        drawable.draw(bitmapCanvas)
+        return bitmap
+    }
+
+    private fun drawHeaderLogo(
+        canvas: Canvas,
+        bitmap: Bitmap,
+        left: Float,
+        top: Float,
+        headerHeight: Float,
+    ) {
+        val maxWidth = 72f
+        val maxHeight = headerHeight - 20f
+        val scale = min(maxWidth / bitmap.width, maxHeight / bitmap.height)
+        val width = bitmap.width * scale
+        val height = bitmap.height * scale
+        val destLeft = left + 10f
+        val destTop = top + (headerHeight - height) / 2f
+        val dest = RectF(destLeft, destTop, destLeft + width, destTop + height)
+        canvas.drawBitmap(bitmap, null, dest, null)
+    }
+
+    private fun drawColumnAmount(
+        canvas: Canvas,
+        columnLeft: Float,
+        columnRight: Float,
+        y: Float,
+        value: String,
+        paint: Paint,
+    ) {
+        val padding = 5f
+        val fitted = fitTextToWidth(value, paint, columnRight - columnLeft - (padding * 2f))
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText(fitted, columnRight - padding, y, paint)
+        paint.textAlign = Paint.Align.LEFT
+    }
+
+    private fun fitTextToWidth(text: String, paint: Paint, maxWidth: Float): String {
+        if (paint.measureText(text) <= maxWidth) return text
+        var trimmed = text
+        while (trimmed.length > 1 && paint.measureText("$trimmed…") > maxWidth) {
+            trimmed = trimmed.dropLast(1)
+        }
+        return if (trimmed.length < text.length) "$trimmed…" else trimmed
+    }
+
+    private fun drawMetaRow(
+        canvas: Canvas,
+        y: Float,
+        x: Float,
+        label: String,
+        value: String,
+        valuePaint: Paint,
+        labelPaint: Paint,
+    ) {
+        canvas.drawText(label, x, y, labelPaint)
+        canvas.drawText(value, x + 92f, y, valuePaint)
+    }
+
+    private fun drawSummary(
+        canvas: Canvas,
+        left: Float,
+        right: Float,
+        top: Float,
+        label: String,
+        value: Double,
+        stroke: Paint,
+        labelPaint: Paint,
+        valuePaint: Paint,
+    ) {
+        val bottom = top + 20f
+        val valueColLeft = left + (right - left) * 0.46f
+        canvas.drawRect(left, top, right, bottom, stroke)
+        canvas.drawLine(valueColLeft, top, valueColLeft, bottom, stroke)
+
+        val labelFitted = fitTextToWidth(label, labelPaint, valueColLeft - left - 8f)
+        canvas.drawText(labelFitted, left + 4f, top + 13f, labelPaint)
+
+        val summaryValuePaint = Paint(valuePaint).apply { textSize = 9f }
+        drawColumnAmount(
+            canvas,
+            valueColLeft,
+            right,
+            top + 13f,
+            Formatters.formatPdfAmount(value),
+            summaryValuePaint,
+        )
+    }
+
+    private enum class HeaderInfoIcon {
+        LOCATION,
+        GST,
+        EMAIL,
+        PHONE,
+        NONE,
+    }
+
+    private data class HeaderInfoRow(
+        val text: String,
+        val icon: HeaderInfoIcon,
+        val isAddressLine: Boolean = false,
+    )
+
+    private fun buildHeaderInfoRows(
+        companyProfile: CompanyProfile,
+        address: String,
+        paint: Paint,
+    ): List<HeaderInfoRow> {
+        val rows = mutableListOf<HeaderInfoRow>()
+        val addressLine = formatHeaderAddressOneLine(
+            address = address,
+            paint = paint,
+            maxWidth = HEADER_INFO_MAX_TEXT_WIDTH,
+        )
+        rows.add(
+            HeaderInfoRow(
+                text = addressLine,
+                icon = HeaderInfoIcon.LOCATION,
+                isAddressLine = true,
+            ),
+        )
+
+        val gstin = companyProfile.gstin.trim()
+        if (gstin.isNotBlank()) {
+            rows.add(HeaderInfoRow(text = "GSTIN:$gstin", icon = HeaderInfoIcon.GST))
+        }
+        if (companyProfile.email.isNotBlank()) {
+            rows.add(HeaderInfoRow(text = "Email:${companyProfile.email.trim()}", icon = HeaderInfoIcon.EMAIL))
+        }
+        if (companyProfile.phone.isNotBlank()) {
+            rows.add(HeaderInfoRow(text = companyProfile.phone.trim(), icon = HeaderInfoIcon.PHONE))
+        }
+        return rows
+    }
+
+    private fun drawHeaderInfoBlock(
+        canvas: Canvas,
+        centerX: Float,
+        startBaselineY: Float,
+        rows: List<HeaderInfoRow>,
+        textPaint: Paint,
+    ) {
+        if (rows.isEmpty()) return
+
+        val iconPaint = Paint(textPaint).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.9f
+        }
+
+        var baselineY = startBaselineY
+        rows.forEach { row ->
+            if (row.isAddressLine) {
+                textPaint.textAlign = Paint.Align.CENTER
+                canvas.drawText(row.text, centerX, baselineY, textPaint)
+                if (row.icon == HeaderInfoIcon.LOCATION) {
+                    val textWidth = textPaint.measureText(row.text)
+                    val iconLeft = centerX - (textWidth / 2f) - HEADER_ICON_GAP - HEADER_ICON_SIZE
+                    drawHeaderInfoIcon(
+                        canvas = canvas,
+                        icon = row.icon,
+                        left = iconLeft,
+                        baselineY = baselineY,
+                        size = HEADER_ICON_SIZE,
+                        paint = iconPaint,
+                    )
+                }
+            } else {
+                val textWidth = textPaint.measureText(row.text)
+                val rowWidth = if (row.icon != HeaderInfoIcon.NONE) {
+                    HEADER_ICON_SIZE + HEADER_ICON_GAP + textWidth
+                } else {
+                    textWidth
+                }
+                val rowLeft = centerX - (rowWidth / 2f)
+                if (row.icon != HeaderInfoIcon.NONE) {
+                    drawHeaderInfoIcon(
+                        canvas = canvas,
+                        icon = row.icon,
+                        left = rowLeft,
+                        baselineY = baselineY,
+                        size = HEADER_ICON_SIZE,
+                        paint = iconPaint,
+                    )
+                }
+                textPaint.textAlign = Paint.Align.LEFT
+                canvas.drawText(
+                    row.text,
+                    rowLeft + if (row.icon != HeaderInfoIcon.NONE) {
+                        HEADER_ICON_SIZE + HEADER_ICON_GAP
+                    } else {
+                        0f
+                    },
+                    baselineY,
+                    textPaint,
+                )
+            }
+            baselineY += HEADER_LINE_SPACING
+        }
+    }
+
+    private fun drawHeaderInfoIcon(
+        canvas: Canvas,
+        icon: HeaderInfoIcon,
+        left: Float,
+        baselineY: Float,
+        size: Float,
+        paint: Paint,
+    ) {
+        val top = baselineY - size + 1f
+        when (icon) {
+            HeaderInfoIcon.LOCATION -> {
+                paint.style = Paint.Style.FILL
+                canvas.drawCircle(left + size / 2f, top + size * 0.28f, size * 0.18f, paint)
+                paint.style = Paint.Style.STROKE
+                canvas.drawLine(
+                    left + size / 2f,
+                    top + size * 0.46f,
+                    left + size / 2f,
+                    top + size * 0.92f,
+                    paint,
+                )
+                canvas.drawCircle(left + size / 2f, top + size * 0.28f, size * 0.34f, paint)
+            }
+            HeaderInfoIcon.GST -> {
+                paint.style = Paint.Style.STROKE
+                canvas.drawCircle(left + size / 2f, top + size / 2f, size * 0.42f, paint)
+                val gstPaint = Paint(paint).apply {
+                    style = Paint.Style.FILL
+                    textSize = size * 0.34f
+                    textAlign = Paint.Align.CENTER
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                }
+                canvas.drawText("GST", left + size / 2f, top + size * 0.62f, gstPaint)
+            }
+            HeaderInfoIcon.EMAIL -> {
+                paint.style = Paint.Style.STROKE
+                canvas.drawRect(left + 0.5f, top + 1f, left + size - 0.5f, top + size * 0.62f, paint)
+                canvas.drawLine(left + 0.5f, top + 1f, left + size / 2f, top + size * 0.34f, paint)
+                canvas.drawLine(left + size - 0.5f, top + 1f, left + size / 2f, top + size * 0.34f, paint)
+                val atPaint = Paint(paint).apply {
+                    style = Paint.Style.FILL
+                    textSize = size * 0.42f
+                    textAlign = Paint.Align.CENTER
+                }
+                canvas.drawText("@", left + size / 2f, top + size * 0.58f, atPaint)
+            }
+            HeaderInfoIcon.PHONE -> {
+                paint.style = Paint.Style.STROKE
+                canvas.drawArc(
+                    left + size * 0.12f,
+                    top + size * 0.08f,
+                    left + size * 0.88f,
+                    top + size * 0.92f,
+                    135f,
+                    160f,
+                    false,
+                    paint,
+                )
+                canvas.drawLine(
+                    left + size * 0.18f,
+                    top + size * 0.82f,
+                    left + size * 0.34f,
+                    top + size * 0.66f,
+                    paint,
+                )
+                canvas.drawLine(
+                    left + size * 0.66f,
+                    top + size * 0.34f,
+                    left + size * 0.82f,
+                    top + size * 0.18f,
+                    paint,
+                )
+            }
+            HeaderInfoIcon.NONE -> Unit
+        }
+    }
+
+    private fun formatHeaderAddressOneLine(
+        address: String,
+        paint: Paint,
+        maxWidth: Float,
+    ): String {
+        val combined = address
+            .split("\n")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .joinToString(", ")
+            .ifBlank { "Puttekkad, Feroke" }
+        return fitTextToWidth(combined, paint, maxWidth)
+    }
+
+    private fun wrapAddressForHeader(address: String, paint: Paint, maxWidth: Float): List<String> {
+        return listOf(formatHeaderAddressOneLine(address, paint, maxWidth))
+    }
+
+    private fun wrapTextToWidth(text: String, paint: Paint, maxWidth: Float): List<String> {
+        if (paint.measureText(text) <= maxWidth) return listOf(text)
+
+        val lines = mutableListOf<String>()
+        var current = ""
+        text.split(Regex("\\s+")).forEach { word ->
+            if (word.isBlank()) return@forEach
+            val candidate = if (current.isEmpty()) word else "$current $word"
+            if (paint.measureText(candidate) <= maxWidth) {
+                current = candidate
+            } else {
+                if (current.isNotEmpty()) lines.add(current)
+                current = word
+            }
+        }
+        if (current.isNotEmpty()) lines.add(current)
+        return lines.ifEmpty { listOf(text) }
+    }
+
+    private fun splitAddressLines(address: String): List<String> {
+        return address
+            .split("\n")
+            .flatMap { it.split(",") }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .chunked(2)
+            .map { chunk -> chunk.joinToString(", ") }
+    }
+
+    private fun ellipsis(text: String, maxLen: Int): String {
+        return if (text.length <= maxLen) text else text.take(max(1, maxLen - 1)) + "..."
+    }
+
+    private fun formatShortDate(millis: Long): String {
+        return SimpleDateFormat("dd-MMM-yy", Locale.getDefault()).format(Date(millis))
+    }
+}
