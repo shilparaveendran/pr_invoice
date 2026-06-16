@@ -78,6 +78,9 @@
     <string name="quantity">Quantity</string>
     <string name="add">Add</string>
     <string name="cancel">Cancel</string>
+    <string name="exit_app_title">Exit app?</string>
+    <string name="exit_app_message">Do you want to exit?</string>
+    <string name="exit">Exit</string>
     <string name="increase">Increase quantity</string>
     <string name="decrease">Decrease quantity</string>
     <string name="remove_from_invoice">Remove</string>

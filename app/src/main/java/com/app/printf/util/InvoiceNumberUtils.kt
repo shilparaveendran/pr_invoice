@@ -44,10 +44,37 @@ object InvoiceNumberUtils {
     fun suggestNext(existingNumbers: List<String>, dateMillis: Long = System.currentTimeMillis()): String {
         val prefix = financialYearPrefix(dateMillis)
         val maxSequence = existingNumbers.mapNotNull { value ->
-            val trimmed = value.trim().uppercase()
-            if (!trimmed.startsWith("$prefix-")) return@mapNotNull null
-            trimmed.removePrefix("$prefix-").toIntOrNull()
+            sequenceForPrefix(value, prefix)
         }.maxOrNull() ?: 0
-        return "$prefix-${(maxSequence + 1).toString().padStart(3, '0')}"
+        return formatInvoiceNumber(prefix, maxSequence + 1)
+    }
+
+    fun suggestNextAfter(
+        existingNumbers: List<String>,
+        lastUsedNumber: String,
+        dateMillis: Long = System.currentTimeMillis(),
+    ): String {
+        val prefix = financialYearPrefix(dateMillis)
+        val lastUsedSequence = sequenceForPrefix(lastUsedNumber, prefix)
+        val maxSequence = maxOf(
+            existingNumbers.mapNotNull { sequenceForPrefix(it, prefix) }.maxOrNull() ?: 0,
+            lastUsedSequence ?: 0,
+        )
+        val next = formatInvoiceNumber(prefix, maxSequence + 1)
+        return if (next == lastUsedNumber.trim().uppercase()) {
+            formatInvoiceNumber(prefix, maxSequence + 2)
+        } else {
+            next
+        }
+    }
+
+    private fun sequenceForPrefix(invoiceNumber: String, prefix: String): Int? {
+        val trimmed = invoiceNumber.trim().uppercase()
+        if (!trimmed.startsWith("$prefix-")) return null
+        return trimmed.removePrefix("$prefix-").toIntOrNull()
+    }
+
+    private fun formatInvoiceNumber(prefix: String, sequence: Int): String {
+        return "$prefix-${sequence.toString().padStart(3, '0')}"
     }
 }

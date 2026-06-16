@@ -104,11 +104,13 @@ class InvoiceViewModel(
             name = invoice.billToName.ifBlank { invoice.customerName },
             address = invoice.billToAddress.ifBlank { invoice.customerAddress },
             gstin = invoice.billToGstin,
+            mobile = invoice.billToMobile,
         )
         val shipTo = PartyDetails(
             name = invoice.shipToName.ifBlank { billTo.name },
             address = invoice.shipToAddress.ifBlank { billTo.address },
             gstin = invoice.shipToGstin,
+            mobile = invoice.shipToMobile,
         )
         val shipSameAsBill = billTo == shipTo
         _uiState.update {
@@ -185,6 +187,7 @@ class InvoiceViewModel(
             name = customer.name,
             address = customer.address,
             gstin = customer.gstin,
+            mobile = customer.mobile,
         )
         _uiState.update { state ->
             state.copy(
@@ -219,6 +222,7 @@ class InvoiceViewModel(
             name = customer.name,
             address = customer.address,
             gstin = customer.gstin,
+            mobile = customer.mobile,
         )
         _uiState.update {
             it.copy(
@@ -274,6 +278,10 @@ class InvoiceViewModel(
         _uiState.update { it.copy(billTo = it.billTo.copy(gstin = value), errorMessage = null) }
     }
 
+    fun onBillToMobileChange(value: String) {
+        _uiState.update { it.copy(billTo = it.billTo.copy(mobile = value), errorMessage = null) }
+    }
+
     fun onShipToNameChange(value: String) {
         _uiState.update { it.copy(shipTo = it.shipTo.copy(name = value), errorMessage = null) }
     }
@@ -284,6 +292,10 @@ class InvoiceViewModel(
 
     fun onShipToGstinChange(value: String) {
         _uiState.update { it.copy(shipTo = it.shipTo.copy(gstin = value), errorMessage = null) }
+    }
+
+    fun onShipToMobileChange(value: String) {
+        _uiState.update { it.copy(shipTo = it.shipTo.copy(mobile = value), errorMessage = null) }
     }
 
     fun addLineItem(product: Product, quantity: Int) {
@@ -395,9 +407,11 @@ class InvoiceViewModel(
                                 billToName = billTo.name,
                                 billToAddress = billTo.address,
                                 billToGstin = billTo.gstin,
+                                billToMobile = billTo.mobile,
                                 shipToName = shipTo.name,
                                 shipToAddress = shipTo.address,
                                 shipToGstin = shipTo.gstin,
+                                shipToMobile = shipTo.mobile,
                                 salesType = state.salesType,
                                 ewayBillNo = state.ewayBillNo,
                                 buyerPoNo = state.buyerPoNo,
@@ -411,9 +425,11 @@ class InvoiceViewModel(
                                 billToName = billTo.name,
                                 billToAddress = billTo.address,
                                 billToGstin = billTo.gstin,
+                                billToMobile = billTo.mobile,
                                 shipToName = shipTo.name,
                                 shipToAddress = shipTo.address,
                                 shipToGstin = shipTo.gstin,
+                                shipToMobile = shipTo.mobile,
                                 salesType = state.salesType,
                                 ewayBillNo = state.ewayBillNo,
                                 buyerPoNo = state.buyerPoNo,
@@ -422,7 +438,7 @@ class InvoiceViewModel(
                         }
                         val pdf = invoiceRepository.generateAndSavePdf(invoiceId)
                         _events.send(InvoiceUiEvent.SharePdf(pdf))
-                        resetDraft()
+                        prepareFreshDraft(justCreatedNumber = invoiceNumber)
                     } catch (e: Exception) {
                         _uiState.update {
                             it.copy(
@@ -436,14 +452,22 @@ class InvoiceViewModel(
         }
     }
 
-    private fun resetDraft() {
-        _uiState.update {
-            InvoiceUiState(
-                products = it.products,
-                customers = it.customers,
-                dateMillis = System.currentTimeMillis(),
-            )
-        }
-        refreshInvoiceMeta()
+    private suspend fun prepareFreshDraft(justCreatedNumber: String? = null) {
+        val snapshot = _uiState.value
+        val dateMillis = System.currentTimeMillis()
+        val nextNumber = invoiceRepository.getNextInvoiceNumber(
+            dateMillis = dateMillis,
+            lastUsedNumber = justCreatedNumber,
+        )
+        val profileSalesType = runCatching { companyProfileRepository.getProfile().salesType }
+            .getOrDefault(TaxConstants.STATE_SALE)
+            .ifBlank { TaxConstants.STATE_SALE }
+        _uiState.value = InvoiceUiState(
+            products = snapshot.products,
+            customers = snapshot.customers,
+            dateMillis = dateMillis,
+            invoiceNumberInput = nextNumber,
+            salesType = profileSalesType,
+        )
     }
 }

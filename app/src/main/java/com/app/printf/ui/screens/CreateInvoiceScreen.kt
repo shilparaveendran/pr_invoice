@@ -157,6 +157,7 @@ fun CreateInvoiceScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
+                    .imePadding()
                     .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -258,6 +259,7 @@ fun CreateInvoiceScreen(
                     onNameChange = viewModel::onBillToNameChange,
                     onAddressChange = viewModel::onBillToAddressChange,
                     onGstinChange = viewModel::onBillToGstinChange,
+                    onMobileChange = viewModel::onBillToMobileChange,
                 )
 
                 Row(
@@ -310,6 +312,7 @@ fun CreateInvoiceScreen(
                         onNameChange = viewModel::onShipToNameChange,
                         onAddressChange = viewModel::onShipToAddressChange,
                         onGstinChange = viewModel::onShipToGstinChange,
+                        onMobileChange = viewModel::onShipToMobileChange,
                     )
                 }
             }
@@ -351,7 +354,7 @@ fun CreateInvoiceScreen(
                             viewModel.updateLineQuantity(item.product.id, item.quantity - 1)
                         },
                         onQuantityInput = { text ->
-                            val qty = text.filter { it.isDigit() }.take(6).toIntOrNull()
+                            val qty = text.filter { it.isDigit() }.toIntOrNull()
                             if (qty != null && qty > 0) {
                                 viewModel.updateLineQuantity(item.product.id, qty)
                             }
@@ -421,6 +424,7 @@ private fun PartyDetailsBlock(
     onNameChange: (String) -> Unit,
     onAddressChange: (String) -> Unit,
     onGstinChange: (String) -> Unit,
+    onMobileChange: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -457,6 +461,12 @@ private fun PartyDetailsBlock(
                 onValueChange = onGstinChange,
                 label = stringResource(R.string.party_gstin),
             )
+            PrintfTextField(
+                value = details.mobile,
+                onValueChange = onMobileChange,
+                label = stringResource(R.string.customer_mobile),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            )
         } else {
             Text(text = details.name, style = MaterialTheme.typography.bodyLarge)
             Text(
@@ -467,6 +477,13 @@ private fun PartyDetailsBlock(
             if (details.gstin.isNotBlank()) {
                 Text(
                     text = "${stringResource(R.string.party_gstin)}: ${details.gstin}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (details.mobile.isNotBlank()) {
+                Text(
+                    text = "${stringResource(R.string.customer_mobile)}: ${details.mobile}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -677,7 +694,7 @@ private fun DraftLineItemCard(
                 PrintfTextField(
                     value = quantityText,
                     onValueChange = { value ->
-                        quantityText = value.filter { it.isDigit() }.take(6)
+                        quantityText = value.filter { it.isDigit() }
                         onQuantityInput(quantityText)
                     },
                     label = stringResource(R.string.quantity),

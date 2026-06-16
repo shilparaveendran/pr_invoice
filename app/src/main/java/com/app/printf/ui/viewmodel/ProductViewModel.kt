@@ -47,7 +47,7 @@ class ProductViewModel(
             ProductFormState(
                 name = product.name,
                 hsn = product.hsn,
-                priceText = product.price.toString(),
+                priceText = formatPriceForEdit(product.price),
                 editingProductId = product.id,
             )
         }
@@ -59,34 +59,39 @@ class ProductViewModel(
 
     fun saveProduct() {
         val form = _uiState.value.form
-        val price = form.priceText.toDoubleOrNull()
+        val price = parsePrice(form.priceText)
         when {
             form.name.isBlank() -> setFormError("Product name is required")
             form.hsn.isBlank() -> setFormError("HSN number is required")
             price == null || price <= 0 -> setFormError("Enter a valid price")
+            form.isEditing && form.editingProductId == null -> setFormError("Product not found")
             else -> {
                 viewModelScope.launch {
                     _uiState.update { it.copy(isSaving = true, successMessage = null) }
-                    if (form.isEditing) {
-                        val product = _uiState.value.products.find { it.id == form.editingProductId }
-                        if (product != null) {
+                    updateForm { it.copy(errorMessage = null) }
+                    try {
+                        if (form.isEditing) {
                             productRepository.updateProduct(
-                                product.copy(
+                                Product(
+                                    id = form.editingProductId!!,
                                     name = form.name.trim(),
                                     hsn = form.hsn.trim(),
                                     price = price,
                                 ),
                             )
+                        } else {
+                            productRepository.addProduct(form.name, form.hsn, price)
                         }
-                    } else {
-                        productRepository.addProduct(form.name, form.hsn, price)
-                    }
-                    _uiState.update {
-                        it.copy(
-                            isSaving = false,
-                            form = ProductFormState(),
-                            successMessage = if (form.isEditing) "Product updated" else "Product added",
-                        )
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                form = ProductFormState(),
+                                successMessage = if (form.isEditing) "Product updated" else "Product added",
+                            )
+                        }
+                    } catch (e: Exception) {
+                        _uiState.update { it.copy(isSaving = false) }
+                        setFormError(e.message ?: "Failed to save product")
                     }
                 }
             }
@@ -112,5 +117,17 @@ class ProductViewModel(
 
     fun clearSuccessMessage() {
         _uiState.update { it.copy(successMessage = null) }
+    }
+
+    private fun parsePrice(text: String): Double? {
+        return text.trim().replace(",", "").toDoubleOrNull()
+    }
+
+    private fun formatPriceForEdit(price: Double): String {
+        return if (price % 1.0 == 0.0) {
+            price.toLong().toString()
+        } else {
+            price.toString()
+        }
     }
 }

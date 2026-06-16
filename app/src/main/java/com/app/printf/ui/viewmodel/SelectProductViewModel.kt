@@ -33,7 +33,7 @@ class SelectProductViewModel(
     }
 
     fun onQuantityChange(quantity: String) {
-        _uiState.update { it.copy(quantityText = quantity.filter { it.isDigit() }.take(6)) }
+        _uiState.update { it.copy(quantityText = quantity.filter { it.isDigit() }) }
     }
 
     fun increaseQuantity() {

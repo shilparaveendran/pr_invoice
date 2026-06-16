@@ -16,7 +16,7 @@ import com.app.printf.data.entity.Product
 
 @Database(
     entities = [Product::class, Customer::class, Invoice::class, InvoiceLineItem::class, CompanyProfile::class],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -36,7 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "printf_db",
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(*DatabaseMigrations.ALL)
                     .build()
                     .also { instance = it }
             }

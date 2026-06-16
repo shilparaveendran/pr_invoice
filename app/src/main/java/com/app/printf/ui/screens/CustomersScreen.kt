@@ -6,9 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -26,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.app.printf.R
 import com.app.printf.data.entity.Customer
@@ -36,6 +40,7 @@ import com.app.printf.ui.components.PrintfPrimaryButton
 import com.app.printf.ui.components.PrintfScreenBackground
 import com.app.printf.ui.components.PrintfSectionHeader
 import com.app.printf.ui.components.PrintfTextField
+import com.app.printf.ui.state.CustomerFormState
 import com.app.printf.ui.viewmodel.CustomerViewModel
 
 @Composable
@@ -46,6 +51,7 @@ fun CustomersScreen(
     val uiState by viewModel.uiState.collectAsState()
     val form = uiState.form
     val context = LocalContext.current
+    val listState = rememberLazyListState()
 
     LaunchedEffect(uiState.successMessage) {
         val msg = uiState.successMessage ?: return@LaunchedEffect
@@ -53,101 +59,69 @@ fun CustomersScreen(
         viewModel.clearSuccessMessage()
     }
 
+    LaunchedEffect(form.editingCustomerId) {
+        if (form.editingCustomerId != null) {
+            listState.animateScrollToItem(0)
+        }
+    }
+
     PrintfScreenBackground(modifier = modifier) {
-        Column(
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            PrintfCard {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    PrintfSectionHeader(
-                        title = if (form.isEditing) {
-                            stringResource(R.string.edit_customer)
-                        } else {
-                            stringResource(R.string.add_customer)
+            item(key = "customer_form") {
+                CustomerFormCard(
+                    form = form,
+                    isSaving = uiState.isSaving,
+                    onNameChange = viewModel::onNameChange,
+                    onAddressChange = viewModel::onAddressChange,
+                    onGstinChange = viewModel::onGstinChange,
+                    onMobileChange = viewModel::onMobileChange,
+                    onCancelEdit = viewModel::cancelEdit,
+                    onSave = viewModel::saveCustomer,
+                )
+            }
+
+            item(key = "saved_customers_header") {
+                PrintfSectionHeader(title = stringResource(R.string.saved_customers))
+            }
+
+            if (uiState.customers.isNotEmpty()) {
+                item(key = "customer_search") {
+                    PrintfTextField(
+                        value = uiState.searchQuery,
+                        onValueChange = viewModel::onSearchQueryChange,
+                        label = stringResource(R.string.search_customers),
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = null)
                         },
                     )
-                    PrintfTextField(
-                        value = form.name,
-                        onValueChange = viewModel::onNameChange,
-                        label = stringResource(R.string.customer_name),
-                    )
-                    PrintfTextField(
-                        value = form.address,
-                        onValueChange = viewModel::onAddressChange,
-                        label = stringResource(R.string.customer_address),
-                        singleLine = false,
-                        minLines = 3,
-                    )
-                    PrintfTextField(
-                        value = form.gstin,
-                        onValueChange = viewModel::onGstinChange,
-                        label = stringResource(R.string.customer_gstin),
-                    )
-                    PrintfTextField(
-                        value = form.mobile,
-                        onValueChange = viewModel::onMobileChange,
-                        label = stringResource(R.string.customer_mobile),
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone,
-                        ),
-                    )
-                    form.errorMessage?.let {
-                        Text(text = it, color = MaterialTheme.colorScheme.error)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (form.isEditing) {
-                            PrintfOutlinedButton(
-                                text = stringResource(R.string.cancel),
-                                onClick = viewModel::cancelEdit,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                        PrintfPrimaryButton(
-                            text = if (form.isEditing) {
-                                stringResource(R.string.update_customer)
-                            } else {
-                                stringResource(R.string.save_customer)
-                            },
-                            onClick = viewModel::saveCustomer,
-                            modifier = Modifier.weight(1f),
-                            enabled = !uiState.isSaving,
-                        )
-                    }
                 }
             }
 
-            PrintfSectionHeader(title = stringResource(R.string.saved_customers))
-
-            if (uiState.customers.isNotEmpty()) {
-                PrintfTextField(
-                    value = uiState.searchQuery,
-                    onValueChange = viewModel::onSearchQueryChange,
-                    label = stringResource(R.string.search_customers),
-                    leadingIcon = {
-                        Icon(Icons.Default.Search, contentDescription = null)
-                    },
-                )
-            }
-
             when {
-                uiState.customers.isEmpty() -> PrintfEmptyState(
-                    message = stringResource(R.string.no_customers),
-                    icon = Icons.Default.People,
-                )
-                uiState.filteredCustomers.isEmpty() -> PrintfEmptyState(
-                    message = stringResource(R.string.no_customer_search_results),
-                    icon = Icons.Default.Search,
-                )
-                else -> LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
+                uiState.customers.isEmpty() -> {
+                    item(key = "empty_customers") {
+                        PrintfEmptyState(
+                            message = stringResource(R.string.no_customers),
+                            icon = Icons.Default.People,
+                        )
+                    }
+                }
+                uiState.filteredCustomers.isEmpty() -> {
+                    item(key = "empty_search") {
+                        PrintfEmptyState(
+                            message = stringResource(R.string.no_customer_search_results),
+                            icon = Icons.Default.Search,
+                        )
+                    }
+                }
+                else -> {
                     items(uiState.filteredCustomers, key = { it.id }) { customer ->
                         CustomerCard(
                             customer = customer,
@@ -157,6 +131,82 @@ fun CustomersScreen(
                         )
                     }
                 }
+            }
+
+            item(key = "bottom_spacer") {
+                Text(text = "", modifier = Modifier.padding(bottom = 16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomerFormCard(
+    form: CustomerFormState,
+    isSaving: Boolean,
+    onNameChange: (String) -> Unit,
+    onAddressChange: (String) -> Unit,
+    onGstinChange: (String) -> Unit,
+    onMobileChange: (String) -> Unit,
+    onCancelEdit: () -> Unit,
+    onSave: () -> Unit,
+) {
+    PrintfCard {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PrintfSectionHeader(
+                title = if (form.isEditing) {
+                    stringResource(R.string.edit_customer)
+                } else {
+                    stringResource(R.string.add_customer)
+                },
+            )
+            PrintfTextField(
+                value = form.name,
+                onValueChange = onNameChange,
+                label = stringResource(R.string.customer_name),
+            )
+            PrintfTextField(
+                value = form.address,
+                onValueChange = onAddressChange,
+                label = stringResource(R.string.customer_address),
+                singleLine = false,
+                minLines = 3,
+            )
+            PrintfTextField(
+                value = form.gstin,
+                onValueChange = onGstinChange,
+                label = stringResource(R.string.customer_gstin),
+            )
+            PrintfTextField(
+                value = form.mobile,
+                onValueChange = onMobileChange,
+                label = stringResource(R.string.customer_mobile),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            )
+            form.errorMessage?.let {
+                Text(text = it, color = MaterialTheme.colorScheme.error)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (form.isEditing) {
+                    PrintfOutlinedButton(
+                        text = stringResource(R.string.cancel),
+                        onClick = onCancelEdit,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                PrintfPrimaryButton(
+                    text = if (form.isEditing) {
+                        stringResource(R.string.update_customer)
+                    } else {
+                        stringResource(R.string.save_customer)
+                    },
+                    onClick = onSave,
+                    modifier = Modifier.weight(1f),
+                    enabled = !isSaving,
+                )
             }
         }
     }

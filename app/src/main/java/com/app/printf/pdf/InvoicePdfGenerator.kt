@@ -35,18 +35,22 @@ object InvoicePdfGenerator {
     private const val OUTER_BOTTOM = PAGE_HEIGHT - 42f
 
     private const val HEADER_LINE_SPACING = 12f
+    private const val HEADER_NAME_ADDRESS_GAP = 10f
     private const val HEADER_INFO_TEXT_SIZE = 9.5f
     private const val HEADER_ICON_SIZE = 10f
     private const val PDF_BASE_TEXT_SIZE = 10f
-    private const val PDF_COMPANY_NAME_SIZE = 18f
+    private const val PDF_COMPANY_NAME_SIZE = 25f
     private const val PDF_TAX_INVOICE_SIZE = 11.5f
     private const val HEADER_ICON_GAP = 5f
     private const val HEADER_INFO_MAX_TEXT_WIDTH = 460f
     private const val META_H = 66f
-    private const val PARTY_H = 108f
+    private const val PARTY_H = 118f
     private const val PARTY_ADDRESS_LINE_SPACING = 13f
-    private const val TABLE_HEADER_H = 22f
+    private const val TABLE_HEADER_H = 28f
     private const val TABLE_ROW_H = 24f
+    private const val TABLE_LINE_HEIGHT = 11f
+    private const val TABLE_CELL_MAX_LINES = 2
+    private const val TABLE_CELL_PADDING = 4f
     private const val MIN_TABLE_BODY_ROWS = 10
     private const val FOOTER_MIN_H = 200f
 
@@ -112,7 +116,7 @@ object InvoicePdfGenerator {
         val centerX = (OUTER_LEFT + OUTER_RIGHT) / 2f
         val headerInfoPaint = Paint(text).apply { textSize = HEADER_INFO_TEXT_SIZE }
         val headerRows = buildHeaderInfoRows(companyProfile, companyAddress, headerInfoPaint)
-        val contentHeaderHeight = 34f + (headerRows.size * HEADER_LINE_SPACING) + 10f
+        val contentHeaderHeight = 34f + HEADER_NAME_ADDRESS_GAP + (headerRows.size * HEADER_LINE_SPACING) + 10f
         val headerHeight = max(contentHeaderHeight, 78f)
         val headerBottom = y + headerHeight
 
@@ -127,12 +131,12 @@ object InvoicePdfGenerator {
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
         }
-        canvas.drawText(companyName.uppercase(), centerX, y + 24f, companyNamePaint)
+        canvas.drawText(companyName.uppercase(), centerX, y + 30f, companyNamePaint)
 
         drawHeaderInfoBlock(
             canvas = canvas,
             centerX = centerX,
-            startBaselineY = y + 38f,
+            startBaselineY = y + 38f + HEADER_NAME_ADDRESS_GAP,
             rows = headerRows,
             textPaint = headerInfoPaint,
         )
@@ -156,8 +160,8 @@ object InvoicePdfGenerator {
         }
 
         val invNo = InvoiceNumberUtils.formatForPdf(invoice.invoiceNumber)
-        val dateText = formatShortDate(invoice.dateMillis)
-        val dueDate = formatShortDate(invoice.dateMillis + (15L * 24 * 60 * 60 * 1000))
+        val dateText = Formatters.formatDate(invoice.dateMillis)
+        val dueDate = Formatters.formatDate(invoice.dateMillis + (15L * 24 * 60 * 60 * 1000))
 
         drawMetaRow(canvas, y + metaRowH * 0 + 12f, OUTER_LEFT + 6f, "Invoice Number:", invNo, bold, text)
         drawMetaRow(canvas, y + metaRowH * 1 + 12f, OUTER_LEFT + 6f, "Invoice date:", dateText, bold, text)
@@ -191,6 +195,8 @@ object InvoicePdfGenerator {
         val shipAddress = invoice.shipToAddress.ifBlank { billAddress }
         val billGstin = invoice.billToGstin.ifBlank { "-" }
         val shipGstin = invoice.shipToGstin.ifBlank { "-" }
+        val billMobile = invoice.billToMobile.trim()
+        val shipMobile = invoice.shipToMobile.trim()
 
         bold.textSize = 12f
         canvas.drawText(billName.uppercase(), OUTER_LEFT + 6f, y + 36f, bold)
@@ -199,11 +205,18 @@ object InvoicePdfGenerator {
         text.textSize = 9.5f
         val billLines = splitAddressLines(billAddress)
         val shipLines = splitAddressLines(shipAddress)
-        val maxLines = max(billLines.size, shipLines.size).coerceAtMost(4)
+        val maxLines = max(billLines.size, shipLines.size).coerceAtMost(3)
         for (i in 0 until maxLines) {
             val lineY = y + 48f + (i * PARTY_ADDRESS_LINE_SPACING)
             billLines.getOrNull(i)?.let { canvas.drawText(it, OUTER_LEFT + 6f, lineY, text) }
             shipLines.getOrNull(i)?.let { canvas.drawText(it, partyMidX + 6f, lineY, text) }
+        }
+        val mobileRowY = y + 48f + (maxLines * PARTY_ADDRESS_LINE_SPACING) + 2f
+        if (billMobile.isNotBlank()) {
+            canvas.drawText("Mob: $billMobile", OUTER_LEFT + 6f, mobileRowY, text)
+        }
+        if (shipMobile.isNotBlank()) {
+            canvas.drawText("Mob: $shipMobile", partyMidX + 6f, mobileRowY, text)
         }
         val salesRowTop = partyBottom - 18f
         canvas.drawLine(OUTER_LEFT, salesRowTop, OUTER_RIGHT, salesRowTop, stroke)
@@ -216,15 +229,12 @@ object InvoicePdfGenerator {
 
         // 4) Items table
         val tableTop = y
-        val colPerc = floatArrayOf(0.06f, 0.28f, 0.08f, 0.08f, 0.12f, 0.08f, 0.30f)
+        val colPerc = floatArrayOf(0.05f, 0.30f, 0.09f, 0.09f, 0.12f, 0.10f, 0.25f)
         val colX = FloatArray(colPerc.size + 1)
         colX[0] = OUTER_LEFT
         for (i in colPerc.indices) {
             colX[i + 1] = colX[i] + ((OUTER_RIGHT - OUTER_LEFT) * colPerc[i])
         }
-
-        canvas.drawRect(OUTER_LEFT, tableTop, OUTER_RIGHT, tableTop + TABLE_HEADER_H, stroke)
-        colX.forEach { xLine -> canvas.drawLine(xLine, tableTop, xLine, tableTop + TABLE_HEADER_H, stroke) }
 
         val headers = listOf(
             "SL NO",
@@ -232,13 +242,30 @@ object InvoicePdfGenerator {
             "HSN/SAC",
             "Quantity",
             "Unit Price",
-            "TAX RATE",
+            "Tax Rate",
             "Gross Amount",
         )
         bold.textSize = 9f
-        headers.forEachIndexed { i, h -> canvas.drawText(h, colX[i] + 2f, tableTop + 15f, bold) }
+        val tableHeaderH = TABLE_HEADER_H
 
-        var rowY = tableTop + TABLE_HEADER_H
+        canvas.drawRect(OUTER_LEFT, tableTop, OUTER_RIGHT, tableTop + tableHeaderH, stroke)
+        colX.forEach { xLine -> canvas.drawLine(xLine, tableTop, xLine, tableTop + tableHeaderH, stroke) }
+
+        headers.forEachIndexed { index, header ->
+            val maxWidth = columnWidth(colX, index)
+            drawTableTextLines(
+                canvas = canvas,
+                lines = listOf(fitTextToWidth(header, bold, maxWidth)),
+                columnLeft = colX[index],
+                columnRight = colX[index + 1],
+                firstBaselineY = tableTop + 18f,
+                lineHeight = TABLE_LINE_HEIGHT,
+                paint = bold,
+                align = Paint.Align.CENTER,
+            )
+        }
+
+        var rowY = tableTop + tableHeaderH
         text.textSize = 9.5f
         right.textSize = 9.5f
         center.textSize = 9.5f
@@ -247,22 +274,97 @@ object InvoicePdfGenerator {
         for (i in items.indices) {
             val item = items[i]
             val lineAmount = item.unitPrice * item.quantity
-            canvas.drawText((i + 1).toString(), colX[0] + 3f, rowY + 15f, text)
-            canvas.drawText(
-                ellipsis(item.productName.uppercase(), 24),
-                colX[1] + 3f,
-                rowY + 15f,
-                text,
+            val rowTop = rowY
+
+            val descriptionLines = wrapTextToMaxLines(
+                text = item.productName.uppercase(),
+                paint = text,
+                maxWidth = columnWidth(colX, 1),
+                maxLines = TABLE_CELL_MAX_LINES,
             )
-            canvas.drawText(item.hsn, colX[2] + 2f, rowY + 15f, text)
-            canvas.drawText(item.quantity.toString(), colX[3] + 2f, rowY + 15f, text)
-            drawColumnAmount(canvas, colX[4], colX[5], rowY + 15f, Formatters.formatPdfAmount(item.unitPrice), right)
-            canvas.drawText(lineTaxRate, (colX[5] + colX[6]) / 2f, rowY + 15f, center)
-            drawColumnAmount(canvas, colX[6], colX[7], rowY + 15f, Formatters.formatPdfAmount(lineAmount), right)
-            rowY += TABLE_ROW_H
+            val hsnLines = wrapTextToMaxLines(
+                text = item.hsn,
+                paint = text,
+                maxWidth = columnWidth(colX, 2),
+                maxLines = TABLE_CELL_MAX_LINES,
+            )
+            val qtyLines = wrapTextToMaxLines(
+                text = item.quantity.toString(),
+                paint = text,
+                maxWidth = columnWidth(colX, 3),
+                maxLines = TABLE_CELL_MAX_LINES,
+            )
+            val rowLineCount = maxOf(descriptionLines.size, hsnLines.size, qtyLines.size, 1)
+            val rowHeight = tableRowHeight(rowLineCount)
+            val firstBaselineY = rowTop + 14f
+
+            drawTableTextLines(
+                canvas = canvas,
+                lines = listOf((i + 1).toString()),
+                columnLeft = colX[0],
+                columnRight = colX[1],
+                firstBaselineY = firstBaselineY,
+                lineHeight = TABLE_LINE_HEIGHT,
+                paint = text,
+                align = Paint.Align.CENTER,
+            )
+            drawTableTextLines(
+                canvas = canvas,
+                lines = descriptionLines,
+                columnLeft = colX[1],
+                columnRight = colX[2],
+                firstBaselineY = firstBaselineY,
+                lineHeight = TABLE_LINE_HEIGHT,
+                paint = text,
+            )
+            drawTableTextLines(
+                canvas = canvas,
+                lines = hsnLines,
+                columnLeft = colX[2],
+                columnRight = colX[3],
+                firstBaselineY = firstBaselineY,
+                lineHeight = TABLE_LINE_HEIGHT,
+                paint = text,
+            )
+            drawTableTextLines(
+                canvas = canvas,
+                lines = qtyLines,
+                columnLeft = colX[3],
+                columnRight = colX[4],
+                firstBaselineY = firstBaselineY,
+                lineHeight = TABLE_LINE_HEIGHT,
+                paint = text,
+            )
+            drawColumnAmount(
+                canvas,
+                colX[4],
+                colX[5],
+                firstBaselineY,
+                Formatters.formatPdfAmount(item.unitPrice),
+                right,
+            )
+            drawTableTextLines(
+                canvas = canvas,
+                lines = listOf(lineTaxRate),
+                columnLeft = colX[5],
+                columnRight = colX[6],
+                firstBaselineY = firstBaselineY,
+                lineHeight = TABLE_LINE_HEIGHT,
+                paint = center,
+                align = Paint.Align.CENTER,
+            )
+            drawColumnAmount(
+                canvas,
+                colX[6],
+                colX[7],
+                firstBaselineY,
+                Formatters.formatPdfAmount(lineAmount),
+                right,
+            )
+            rowY += rowHeight
         }
 
-        val minTableBottom = tableTop + TABLE_HEADER_H + (MIN_TABLE_BODY_ROWS * TABLE_ROW_H)
+        val minTableBottom = tableTop + tableHeaderH + (MIN_TABLE_BODY_ROWS * TABLE_ROW_H)
         val itemsBottom = rowY
         val bottomTop = max(itemsBottom, minTableBottom).coerceAtMost(OUTER_BOTTOM - FOOTER_MIN_H)
 
@@ -283,11 +385,21 @@ object InvoicePdfGenerator {
         bold.textSize = PDF_BASE_TEXT_SIZE
         text.textSize = PDF_BASE_TEXT_SIZE
         canvas.drawText("Our Bank Details", OUTER_LEFT + 8f, bottomTop + 62f, bold)
-        canvas.drawText("Account Holder Name: ${companyProfile.accountHolderName.ifBlank { companyName.uppercase() }}", OUTER_LEFT + 8f, bottomTop + 80f, text)
-        canvas.drawText("Account Number: ${companyProfile.accountNumber.ifBlank { "N/A" }}", OUTER_LEFT + 8f, bottomTop + 94f, text)
-        canvas.drawText("IFSC: ${companyProfile.ifscCode.ifBlank { "N/A" }}", OUTER_LEFT + 8f, bottomTop + 108f, text)
-        canvas.drawText("Account Type: ${companyProfile.accountType.ifBlank { "CURRENT" }}", OUTER_LEFT + 8f, bottomTop + 122f, text)
-        canvas.drawText("Bank: ${companyProfile.bankName.ifBlank { "N/A" }}", OUTER_LEFT + 8f, bottomTop + 136f, text)
+        drawAlignedLabelValueRows(
+            canvas = canvas,
+            left = OUTER_LEFT + 8f,
+            right = splitX - 8f,
+            firstBaselineY = bottomTop + 80f,
+            lineHeight = 14f,
+            rows = listOf(
+                "Account Holder Name" to companyProfile.accountHolderName.ifBlank { companyName.uppercase() },
+                "Account Number" to companyProfile.accountNumber.ifBlank { "N/A" },
+                "IFSC" to companyProfile.ifscCode.ifBlank { "N/A" },
+                "Account Type" to companyProfile.accountType.ifBlank { "CURRENT" },
+                "Bank" to companyProfile.bankName.ifBlank { "N/A" },
+            ),
+            paint = text,
+        )
 
         // Right: tax summary
         var sy = bottomTop
@@ -398,8 +510,8 @@ object InvoicePdfGenerator {
         top: Float,
         headerHeight: Float,
     ) {
-        val maxWidth = 72f
-        val maxHeight = headerHeight - 20f
+        val maxWidth = 100f
+        val maxHeight = headerHeight - 14f
         val scale = min(maxWidth / bitmap.width, maxHeight / bitmap.height)
         val width = bitmap.width * scale
         val height = bitmap.height * scale
@@ -431,6 +543,38 @@ object InvoicePdfGenerator {
             trimmed = trimmed.dropLast(1)
         }
         return if (trimmed.length < text.length) "$trimmed…" else trimmed
+    }
+
+    private fun drawAlignedLabelValueRows(
+        canvas: Canvas,
+        left: Float,
+        right: Float,
+        firstBaselineY: Float,
+        lineHeight: Float,
+        rows: List<Pair<String, String>>,
+        paint: Paint,
+    ) {
+        if (rows.isEmpty()) return
+
+        val colon = ":"
+        val colonGap = 6f
+        val valueGap = 10f
+        val maxLabelWidth = rows.maxOf { paint.measureText(it.first) }
+        val labelRight = left + maxLabelWidth
+        val colonX = labelRight + colonGap
+        val valueX = colonX + paint.measureText(colon) + valueGap
+        val valueMaxWidth = (right - valueX).coerceAtLeast(0f)
+
+        val labelPaint = Paint(paint).apply { textAlign = Paint.Align.RIGHT }
+        val colonPaint = Paint(paint).apply { textAlign = Paint.Align.LEFT }
+        val valuePaint = Paint(paint).apply { textAlign = Paint.Align.LEFT }
+
+        rows.forEachIndexed { index, (label, value) ->
+            val y = firstBaselineY + (index * lineHeight)
+            canvas.drawText(label, labelRight, y, labelPaint)
+            canvas.drawText(colon, colonX, y, colonPaint)
+            canvas.drawText(fitTextToWidth(value, valuePaint, valueMaxWidth), valueX, y, valuePaint)
+        }
     }
 
     private fun drawMetaRow(
@@ -682,23 +826,92 @@ object InvoicePdfGenerator {
         return listOf(formatHeaderAddressOneLine(address, paint, maxWidth))
     }
 
+    private fun columnWidth(colX: FloatArray, columnIndex: Int): Float {
+        return colX[columnIndex + 1] - colX[columnIndex] - (TABLE_CELL_PADDING * 2f)
+    }
+
+    private fun tableRowHeight(lineCount: Int): Float {
+        val lines = lineCount.coerceAtLeast(1)
+        return max(TABLE_ROW_H, 10f + 14f + ((lines - 1) * TABLE_LINE_HEIGHT))
+    }
+
+    private fun drawTableTextLines(
+        canvas: Canvas,
+        lines: List<String>,
+        columnLeft: Float,
+        columnRight: Float,
+        firstBaselineY: Float,
+        lineHeight: Float,
+        paint: Paint,
+        align: Paint.Align = Paint.Align.LEFT,
+    ) {
+        val maxWidth = columnRight - columnLeft - (TABLE_CELL_PADDING * 2f)
+        val x = when (align) {
+            Paint.Align.CENTER -> (columnLeft + columnRight) / 2f
+            Paint.Align.RIGHT -> columnRight - TABLE_CELL_PADDING
+            else -> columnLeft + TABLE_CELL_PADDING
+        }
+        val linePaint = Paint(paint).apply { textAlign = align }
+        lines.forEachIndexed { index, line ->
+            val fitted = fitTextToWidth(line, linePaint, maxWidth)
+            canvas.drawText(fitted, x, firstBaselineY + (index * lineHeight), linePaint)
+        }
+    }
+
+    private fun wrapTextToMaxLines(
+        text: String,
+        paint: Paint,
+        maxWidth: Float,
+        maxLines: Int,
+    ): List<String> {
+        val wrapped = wrapTextToWidth(text.trim(), paint, maxWidth)
+        if (wrapped.size <= maxLines) return wrapped.ifEmpty { listOf("") }
+
+        val kept = wrapped.take(maxLines - 1).toMutableList()
+        val remainder = wrapped.drop(maxLines - 1).joinToString(" ")
+        kept.add(fitTextToWidth(remainder, paint, maxWidth))
+        return kept
+    }
+
+    private fun breakLongWord(word: String, paint: Paint, maxWidth: Float): List<String> {
+        if (paint.measureText(word) <= maxWidth) return listOf(word)
+
+        val parts = mutableListOf<String>()
+        var chunk = ""
+        word.forEach { char ->
+            val candidate = chunk + char
+            if (paint.measureText(candidate) <= maxWidth) {
+                chunk = candidate
+            } else {
+                if (chunk.isNotEmpty()) parts.add(chunk)
+                chunk = char.toString()
+            }
+        }
+        if (chunk.isNotEmpty()) parts.add(chunk)
+        return parts.ifEmpty { listOf(word) }
+    }
+
     private fun wrapTextToWidth(text: String, paint: Paint, maxWidth: Float): List<String> {
+        if (text.isBlank()) return listOf("")
         if (paint.measureText(text) <= maxWidth) return listOf(text)
 
         val lines = mutableListOf<String>()
         var current = ""
         text.split(Regex("\\s+")).forEach { word ->
             if (word.isBlank()) return@forEach
-            val candidate = if (current.isEmpty()) word else "$current $word"
-            if (paint.measureText(candidate) <= maxWidth) {
-                current = candidate
-            } else {
-                if (current.isNotEmpty()) lines.add(current)
-                current = word
+            val segments = breakLongWord(word, paint, maxWidth)
+            segments.forEach { segment ->
+                val candidate = if (current.isEmpty()) segment else "$current $segment"
+                if (paint.measureText(candidate) <= maxWidth) {
+                    current = candidate
+                } else {
+                    if (current.isNotEmpty()) lines.add(current)
+                    current = segment
+                }
             }
         }
         if (current.isNotEmpty()) lines.add(current)
-        return lines.ifEmpty { listOf(text) }
+        return lines.ifEmpty { listOf(fitTextToWidth(text, paint, maxWidth)) }
     }
 
     private fun splitAddressLines(address: String): List<String> {
@@ -713,9 +926,5 @@ object InvoicePdfGenerator {
 
     private fun ellipsis(text: String, maxLen: Int): String {
         return if (text.length <= maxLen) text else text.take(max(1, maxLen - 1)) + "..."
-    }
-
-    private fun formatShortDate(millis: Long): String {
-        return SimpleDateFormat("dd-MMM-yy", Locale.getDefault()).format(Date(millis))
     }
 }

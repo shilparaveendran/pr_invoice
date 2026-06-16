@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -115,6 +116,7 @@ fun PdfPreviewScreen(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
+                            .imePadding()
                             .padding(padding)
                             .padding(horizontal = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
