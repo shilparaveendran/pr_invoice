@@ -54,7 +54,13 @@ object InvoicePdfGenerator {
     private const val TABLE_CELL_MAX_LINES = 2
     private const val TABLE_CELL_PADDING = 4f
     private const val MIN_TABLE_BODY_ROWS = 10
-    private const val FOOTER_MIN_H = 200f
+    private const val FOOTER_MIN_H = 220f
+    private const val SUMMARY_ROW_H = 18f
+    private const val SIGNATURE_LABEL_OFFSET = 10f
+    private const val SIGNATURE_LABEL_GAP = 6f
+    private const val SIGNATURE_MAX_HEIGHT = 58f
+    private const val SIGNATURE_FOR_GAP = 8f
+    private const val SIGNATURE_MAX_WIDTH_RATIO = 0.95f
 
     private const val COLOR_BLACK = Color.BLACK
     private val COLOR_TAX_INVOICE = Color.rgb(192, 96, 0)
@@ -425,37 +431,36 @@ object InvoicePdfGenerator {
         )
 
         // Right: tax summary
+        val signatureLayout = signatureBlockLayout()
         var sy = bottomTop
-        val sr = 20f
         drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Total Amount", subTotal, stroke, text, right)
-        sy += sr
+        sy += SUMMARY_ROW_H
         if (isInterstate) {
             drawSummary(canvas, splitX, OUTER_RIGHT, sy, "IGST @18%", igst, stroke, text, right)
-            sy += sr
+            sy += SUMMARY_ROW_H
         } else {
             drawSummary(canvas, splitX, OUTER_RIGHT, sy, "SGST @9%", sgst, stroke, text, right)
-            sy += sr
+            sy += SUMMARY_ROW_H
             drawSummary(canvas, splitX, OUTER_RIGHT, sy, "CGST @9%", cgst, stroke, text, right)
-            sy += sr
+            sy += SUMMARY_ROW_H
         }
         drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Total GST Amt", totalGst, stroke, text, right)
-        sy += sr
+        sy += SUMMARY_ROW_H
         drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Sub Total", gross, stroke, bold, rightBold)
-        sy += sr
+        sy += SUMMARY_ROW_H
         drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Rounding off", rounding, stroke, text, right)
-        sy += sr
+        sy += SUMMARY_ROW_H
         drawSummary(canvas, splitX, OUTER_RIGHT, sy, "Grand Total", roundedGrand, stroke, bold, rightBold)
-        sy += 40f
 
         text.textSize = PDF_BASE_TEXT_SIZE
-        canvas.drawText("For ${companyName.uppercase()}", splitX + 8f, sy, text)
+        canvas.drawText("For ${companyName.uppercase()}", splitX + 8f, signatureLayout.forLineBaseline, text)
 
         drawAuthorizedSignatureBlock(
             canvas = canvas,
             signaturePath = companyProfile.signaturePath,
             cellLeft = splitX,
             cellRight = OUTER_RIGHT,
-            forLineBaseline = sy,
+            layout = signatureLayout,
             center = center,
         )
 
@@ -465,36 +470,53 @@ object InvoicePdfGenerator {
         return file
     }
 
+    private data class SignatureBlockLayout(
+        val forLineBaseline: Float,
+        val signatureAreaTop: Float,
+        val signatureAreaBottom: Float,
+        val labelBaseline: Float,
+        val maxSignatureHeight: Float,
+    )
+
+    private fun signatureBlockLayout(): SignatureBlockLayout {
+        val labelBaseline = OUTER_BOTTOM - SIGNATURE_LABEL_OFFSET
+        val signatureAreaBottom = labelBaseline - SIGNATURE_LABEL_GAP
+        val signatureAreaTop = signatureAreaBottom - SIGNATURE_MAX_HEIGHT
+        val forLineBaseline = signatureAreaTop - SIGNATURE_FOR_GAP
+        return SignatureBlockLayout(
+            forLineBaseline = forLineBaseline,
+            signatureAreaTop = signatureAreaTop,
+            signatureAreaBottom = signatureAreaBottom,
+            labelBaseline = labelBaseline,
+            maxSignatureHeight = SIGNATURE_MAX_HEIGHT,
+        )
+    }
+
     private fun drawAuthorizedSignatureBlock(
         canvas: Canvas,
         signaturePath: String,
         cellLeft: Float,
         cellRight: Float,
-        forLineBaseline: Float,
+        layout: SignatureBlockLayout,
         center: Paint,
     ) {
         val label = "Authorized Signature"
-        val horizontalPadding = 10f
+        val horizontalPadding = 8f
         val innerLeft = cellLeft + horizontalPadding
         val innerRight = cellRight - horizontalPadding
         val cellCenterX = (innerLeft + innerRight) / 2f
         val cellWidth = innerRight - innerLeft
 
-        val labelBaseline = OUTER_BOTTOM - 12f
-        val signatureAreaBottom = labelBaseline - 14f
-        val signatureAreaTop = forLineBaseline + 18f
-        val maxSignatureHeight = (signatureAreaBottom - signatureAreaTop).coerceAtLeast(18f)
-
         center.textSize = 9.5f
-        canvas.drawText(label, cellCenterX, labelBaseline, center)
+        canvas.drawText(label, cellCenterX, layout.labelBaseline, center)
 
         loadSignatureBitmap(signaturePath)?.let { signature ->
-            val maxWidth = cellWidth * 0.9f
-            val scale = min(maxWidth / signature.width, maxSignatureHeight / signature.height)
+            val maxWidth = cellWidth * SIGNATURE_MAX_WIDTH_RATIO
+            val scale = min(maxWidth / signature.width, layout.maxSignatureHeight / signature.height)
             val width = signature.width * scale
             val height = signature.height * scale
             val destLeft = cellCenterX - (width / 2f)
-            val destBottom = signatureAreaBottom
+            val destBottom = layout.signatureAreaBottom
             val destTop = destBottom - height
             val dest = RectF(destLeft, destTop, destLeft + width, destBottom)
             canvas.drawBitmap(signature, null, dest, null)
@@ -625,20 +647,21 @@ object InvoicePdfGenerator {
         labelPaint: Paint,
         valuePaint: Paint,
     ) {
-        val bottom = top + 20f
+        val bottom = top + SUMMARY_ROW_H
         val valueColLeft = left + (right - left) * 0.46f
         canvas.drawRect(left, top, right, bottom, stroke)
         canvas.drawLine(valueColLeft, top, valueColLeft, bottom, stroke)
 
+        val textBaseline = top + (SUMMARY_ROW_H * 0.72f)
         val labelFitted = fitTextToWidth(label, labelPaint, valueColLeft - left - 8f)
-        canvas.drawText(labelFitted, left + 4f, top + 13f, labelPaint)
+        canvas.drawText(labelFitted, left + 4f, textBaseline, labelPaint)
 
         val summaryValuePaint = Paint(valuePaint).apply { textSize = 9f }
         drawColumnAmount(
             canvas,
             valueColLeft,
             right,
-            top + 13f,
+            textBaseline,
             Formatters.formatPdfAmount(value),
             summaryValuePaint,
         )
